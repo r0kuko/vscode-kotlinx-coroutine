@@ -1,0 +1,128 @@
+{
+  "name": "vscode-kotlinx-coroutine",
+  "displayName": "Kotlinx Coroutines Insight",
+  "description": "JetBrains-style suspension highlighting and developer-productivity boosters for Kotlin coroutines (kotlinx.coroutines, Flow, suspend functions).",
+  "version": "0.1.0",
+  "publisher": "r0kuko",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "kotlin",
+    "coroutines",
+    "kotlinx",
+    "suspend",
+    "flow"
+  ],
+  "activationEvents": [
+    "onLanguage:kotlin"
+  ],
+  "main": "./out/extension.js",
+  "icon": "images/kotlinx-icon.png",
+  "contributes": {
+    "configuration": {
+      "title": "Kotlinx Coroutines Insight",
+      "properties": {
+        "kotlinxCoroutines.gutterIcons.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a suspendCall gutter icon next to every detected suspension point."
+        },
+        "kotlinxCoroutines.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show subtle inlay hints (e.g. \"suspend\") at suspension points."
+        },
+        "kotlinxCoroutines.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a CodeLens above coroutine builders and suspend functions with the number of suspension points inside."
+        },
+        "kotlinxCoroutines.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a status-bar item with the count of suspension points in the current file."
+        },
+        "kotlinxCoroutines.extraSuspendFunctions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional bare function names to treat as suspend calls (e.g. project-internal helpers)."
+        },
+        "kotlinxCoroutines.extraCoroutineBuilders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional bare function names to treat as coroutine builders (CoroutineScope.f { ... })."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "kotlinxCoroutines.gotoNextSuspendPoint",
+        "title": "Coroutines: Go to Next Suspension Point",
+        "category": "Kotlinx Coroutines"
+      },
+      {
+        "command": "kotlinxCoroutines.gotoPreviousSuspendPoint",
+        "title": "Coroutines: Go to Previous Suspension Point",
+        "category": "Kotlinx Coroutines"
+      },
+      {
+        "command": "kotlinxCoroutines.refresh",
+        "title": "Coroutines: Re-analyze Active File",
+        "category": "Kotlinx Coroutines"
+      },
+      {
+        "command": "kotlinxCoroutines.toggleGutterIcons",
+        "title": "Coroutines: Toggle Suspension Gutter Icons",
+        "category": "Kotlinx Coroutines"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "kotlinxCoroutines.gotoNextSuspendPoint",
+        "key": "alt+down",
+        "mac": "alt+down",
+        "when": "editorTextFocus && editorLangId == kotlin"
+      },
+      {
+        "command": "kotlinxCoroutines.gotoPreviousSuspendPoint",
+        "key": "alt+up",
+        "mac": "alt+up",
+        "when": "editorTextFocus && editorLangId == kotlin"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "icon": "node scripts/generate_icon.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.80.0",
+    "sharp": "^0.34.5",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r0kuko/vscode-kotlinx-coroutine"
+  },
+  "extensionDependencies": [],
+  "extensionPack": []
+}
