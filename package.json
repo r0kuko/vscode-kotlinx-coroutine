@@ -44,11 +44,6 @@
           "default": true,
           "description": "Show a CodeLens above coroutine builders and suspend functions with the number of suspension points inside."
         },
-        "kotlinxCoroutines.statusBar.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a status-bar item with the count of suspension points in the current file."
-        },
         "kotlinxCoroutines.extraSuspendFunctions": {
           "type": "array",
           "items": {

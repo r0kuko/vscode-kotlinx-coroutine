@@ -28,7 +28,6 @@ type GutterIconId = 'call' | 'declaration' | 'function' | 'method';
 /** Subtle underline-style decoration used to make suspend calls visually distinct. */
 let inlineDecoration: vscode.TextEditorDecorationType;
 
-let statusBar: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -41,7 +40,12 @@ export function activate(context: vscode.ExtensionContext): void {
             light: { gutterIconPath: vscode.Uri.file(path.join(context.extensionPath, 'images', lightFile)) },
             dark: { gutterIconPath: vscode.Uri.file(path.join(context.extensionPath, 'images', darkFile)) },
         });
-    gutterDecorations.set('call', makeGutter('suspendCall.svg', 'suspendCall_dark.svg'));
+    // Call-site suspension points use the overview ruler only — a gutter icon
+    // on those lines blocks VS Code from registering debug breakpoint clicks.
+    gutterDecorations.set('call', vscode.window.createTextEditorDecorationType({
+        overviewRulerColor: 'rgba(127,82,255,0.6)',
+        overviewRulerLane: vscode.OverviewRulerLane.Left,
+    }));
     gutterDecorations.set('declaration', makeGutter('suspendDeclaration.svg', 'suspendDeclaration_dark.svg'));
     gutterDecorations.set('function', makeGutter('suspendFunction.svg', 'suspendFunction_dark.svg'));
     gutterDecorations.set('method', makeGutter('suspendMethod.svg', 'suspendMethod_dark.svg'));
@@ -54,10 +58,6 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     for (const dec of gutterDecorations.values()) context.subscriptions.push(dec);
     context.subscriptions.push(inlineDecoration);
-
-    statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBar.command = 'kotlinxCoroutines.gotoNextSuspendPoint';
-    context.subscriptions.push(statusBar);
 
     // ── Listeners ─────────────────────────────────────────────────────────────
     context.subscriptions.push(
@@ -124,8 +124,6 @@ let pendingEditor: vscode.TextEditor | undefined;
 
 function scheduleUpdate(editor: vscode.TextEditor | undefined): void {
     if (!editor || editor.document.languageId !== KOTLIN_LANG) {
-        // Hide the status bar when the user navigates away from a Kotlin file.
-        statusBar.hide();
         return;
     }
     pendingEditor = editor;
@@ -138,13 +136,9 @@ function scheduleUpdate(editor: vscode.TextEditor | undefined): void {
 
 function updateNow(editor: vscode.TextEditor): void {
     const doc = editor.document;
-    if (doc.languageId !== KOTLIN_LANG) {
-        statusBar.hide();
-        return;
-    }
+    if (doc.languageId !== KOTLIN_LANG) return;
     const points = getOrComputePoints(doc);
     applyDecorations(editor, points);
-    refreshStatusBar(points);
 }
 
 function getOrComputePoints(doc: vscode.TextDocument): SuspensionPoint[] {
@@ -207,21 +201,6 @@ function gutterIconFor(kind: SuspendKind): GutterIconId {
     }
 }
 
-function refreshStatusBar(points: SuspensionPoint[]): void {
-    const cfg = vscode.workspace.getConfiguration('kotlinxCoroutines');
-    if (!cfg.get<boolean>('statusBar.enabled', true)) {
-        statusBar.hide();
-        return;
-    }
-    const callPoints = points.filter(p => !SUSPEND_DECLARATION_KINDS.has(p.kind));
-    if (callPoints.length === 0) {
-        statusBar.hide();
-        return;
-    }
-    statusBar.text = `$(sync~spin) ${callPoints.length} suspension point${callPoints.length === 1 ? '' : 's'}`;
-    statusBar.tooltip = 'Click to jump to the next suspension point.';
-    statusBar.show();
-}
 
 function hoverMarkdown(p: SuspensionPoint): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
