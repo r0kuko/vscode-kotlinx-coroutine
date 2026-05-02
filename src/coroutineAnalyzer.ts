@@ -20,8 +20,11 @@
  *      withContext, withTimeout, ...)
  *  4. `.await()` on Deferred / Job          → SuspendCall
  *  5. Flow terminal operators               → SuspendCall
- *     (collect, collectLatest, collectIndexed, first(OrNull), last(OrNull),
- *      single(OrNull), toList, toSet, count, fold, reduce, ...)
+ *     (collect, collectLatest, collectIndexed, launchIn, stateIn, shareIn,
+ *      collectAsState)
+ *     NOTE: operators like first/last/toList are intentionally excluded because
+ *     they exist on plain Collection/Sequence too and cannot be distinguished
+ *     from Flow terminals without type information.
  *  6. Calls to suspend functions declared earlier in the same file.
  *
  * What we deliberately skip:
@@ -137,26 +140,23 @@ export const BUILTIN_SUSPEND_CALLS: ReadonlySet<string> = new Set([
     'suspendCoroutine',
 ]);
 
-/** Flow terminal operators that suspend. */
+/**
+ * Flow terminal operators that suspend and are *unambiguously* Flow-specific.
+ * Operators like `first`, `last`, `toList`, `count` etc. are intentionally
+ * omitted: they also exist on `Collection` / `Sequence` / `Iterable` and
+ * cannot be distinguished from Flow terminals by regex alone, leading to
+ * false positives on plain list/collection access.
+ */
 export const FLOW_TERMINALS: ReadonlySet<string> = new Set([
+    // collect family — the lambda overload is Flow-only in practice
     'collect',
     'collectLatest',
     'collectIndexed',
-    'first',
-    'firstOrNull',
-    'last',
-    'lastOrNull',
-    'single',
-    'singleOrNull',
-    'toList',
-    'toSet',
-    'toCollection',
-    'count',
-    'fold',
-    'reduce',
+    // Flow lifecycle / sharing operators
     'launchIn',
     'stateIn',
     'shareIn',
+    // Compose integration
     'collectAsState',
 ]);
 
@@ -735,6 +735,77 @@ function builderDescription(name: string): string {
         default:
             return `Coroutine builder '${name}'`;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// withContext block tracker
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A `withContext(Dispatchers.X) { … }` block with its opening/closing brace positions. */
+export interface WithContextBlock {
+    /** The dispatcher label to display, e.g. `"IO"`, `"Default"`, `"Main"`. */
+    dispatcherName: string;
+    /** 0-based line of the opening `{`. */
+    openLine: number;
+    /** 0-based character offset of the opening `{`. */
+    openChar: number;
+    /** 0-based line of the matching closing `}`. */
+    closeLine: number;
+    /** 0-based character offset of the closing `}`. */
+    closeChar: number;
+}
+
+/**
+ * Find all `withContext(Dispatchers.X) { … }` blocks in `source` and return
+ * the position of each opening and matching closing brace.
+ *
+ * Brace matching is done on the stripped source to ignore `{` / `}` inside
+ * string literals and comments.
+ */
+export function findWithContextBlocks(source: string): WithContextBlock[] {
+    const stripped = stripCommentsAndStrings(source);
+    const blocks: WithContextBlock[] = [];
+
+    // Matches: withContext(Dispatchers.IO) {
+    //          withContext(Dispatchers.Main.immediate) {  (dot-separated)
+    const HEADER_RE =
+        /\bwithContext\s*\(\s*Dispatchers\s*\.\s*(\w+(?:\.\w+)?)\s*\)\s*\{/g;
+
+    /** Convert a flat character offset in `stripped` to { line, char }. */
+    function offsetToPos(offset: number): { line: number; char: number } {
+        let line = 0;
+        let lineStart = 0;
+        for (let i = 0; i < offset; i++) {
+            if (stripped[i] === '\n') { line++; lineStart = i + 1; }
+        }
+        return { line, char: offset - lineStart };
+    }
+
+    for (const m of stripped.matchAll(HEADER_RE)) {
+        const braceOffset = m.index! + m[0].length - 1; // offset of opening '{'
+        const open = offsetToPos(braceOffset);
+
+        // Walk forward to find the matching closing brace.
+        let depth = 1;
+        let i = braceOffset + 1;
+        while (i < stripped.length && depth > 0) {
+            if (stripped[i] === '{') depth++;
+            else if (stripped[i] === '}') depth--;
+            i++;
+        }
+        const closeOffset = i - 1; // offset of closing '}'
+        const close = offsetToPos(closeOffset);
+
+        blocks.push({
+            dispatcherName: m[1],
+            openLine: open.line,
+            openChar: open.char,
+            closeLine: close.line,
+            closeChar: close.char,
+        });
+    }
+
+    return blocks;
 }
 
 function suspendCallDescription(name: string): string {

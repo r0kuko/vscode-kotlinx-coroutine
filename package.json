@@ -2,7 +2,7 @@
   "name": "vscode-kotlinx-coroutine",
   "displayName": "Kotlinx Coroutines Insight",
   "description": "JetBrains-style suspension highlighting and developer-productivity boosters for Kotlin coroutines (kotlinx.coroutines, Flow, suspend functions).",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "r0kuko",
   "license": "MIT",
   "engines": {
@@ -43,6 +43,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show a CodeLens above coroutine builders and suspend functions with the number of suspension points inside."
+        },
+        "kotlinxCoroutines.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report coroutine anti-patterns as diagnostics (COR001–COR004: runBlocking in suspend, GlobalScope, Thread.sleep, async{}.await())."
         },
         "kotlinxCoroutines.extraSuspendFunctions": {
           "type": "array",

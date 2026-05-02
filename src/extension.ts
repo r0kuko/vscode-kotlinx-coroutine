@@ -5,7 +5,9 @@ import {
     SuspendKind,
     SuspensionPoint,
     analyze,
+    findWithContextBlocks,
 } from './coroutineAnalyzer';
+import { detectAntiPatterns } from './coroutineDiagnostics';
 
 const KOTLIN_LANG = 'kotlin';
 const DEBOUNCE_MS = 75;
@@ -29,10 +31,14 @@ type GutterIconId = 'call' | 'declaration' | 'function' | 'method';
 let inlineDecoration: vscode.TextEditorDecorationType;
 
 let output: vscode.OutputChannel;
+let diagCollection: vscode.DiagnosticCollection;
 
 export function activate(context: vscode.ExtensionContext): void {
     output = vscode.window.createOutputChannel('Kotlinx Coroutines Insight');
     context.subscriptions.push(output);
+
+    diagCollection = vscode.languages.createDiagnosticCollection('kotlinxCoroutines');
+    context.subscriptions.push(diagCollection);
 
     const makeGutter = (lightFile: string, darkFile: string) =>
         vscode.window.createTextEditorDecorationType({
@@ -72,6 +78,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
         vscode.workspace.onDidCloseTextDocument(doc => {
             cache.delete(doc.uri.toString());
+            diagCollection.delete(doc.uri);
         }),
         vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('kotlinxCoroutines')) {
@@ -86,6 +93,11 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.languages.registerHoverProvider(KOTLIN_LANG, new CoroutineHoverProvider()),
         vscode.languages.registerCodeLensProvider(KOTLIN_LANG, new CoroutineCodeLensProvider()),
         vscode.languages.registerInlayHintsProvider(KOTLIN_LANG, new CoroutineInlayHintsProvider()),
+        vscode.languages.registerCodeActionsProvider(
+            KOTLIN_LANG,
+            new CoroutineCodeActionsProvider(),
+            { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+        ),
     );
 
     // ── Commands ──────────────────────────────────────────────────────────────
@@ -139,6 +151,7 @@ function updateNow(editor: vscode.TextEditor): void {
     if (doc.languageId !== KOTLIN_LANG) return;
     const points = getOrComputePoints(doc);
     applyDecorations(editor, points);
+    refreshDiagnostics(doc);
 }
 
 function getOrComputePoints(doc: vscode.TextDocument): SuspensionPoint[] {
@@ -152,6 +165,29 @@ function getOrComputePoints(doc: vscode.TextDocument): SuspensionPoint[] {
     });
     cache.set(key, { version: doc.version, points });
     return points;
+}
+
+function refreshDiagnostics(doc: vscode.TextDocument): void {
+    const cfg = vscode.workspace.getConfiguration('kotlinxCoroutines');
+    if (!cfg.get<boolean>('diagnostics.enabled', true)) {
+        diagCollection.delete(doc.uri);
+        return;
+    }
+    const points = getOrComputePoints(doc);
+    const problems = detectAntiPatterns(doc.getText(), points);
+    const diags = problems.map(p => {
+        const range = new vscode.Range(p.line, p.startChar, p.line, p.endChar);
+        const sev =
+            p.severity === 'error'       ? vscode.DiagnosticSeverity.Error
+            : p.severity === 'warning'   ? vscode.DiagnosticSeverity.Warning
+            : p.severity === 'information' ? vscode.DiagnosticSeverity.Information
+            : vscode.DiagnosticSeverity.Hint;
+        const d = new vscode.Diagnostic(range, p.message, sev);
+        d.source = 'Kotlinx Coroutines';
+        d.code = p.code;
+        return d;
+    });
+    diagCollection.set(doc.uri, diags);
 }
 
 function applyDecorations(editor: vscode.TextEditor, points: SuspensionPoint[]): void {
@@ -305,6 +341,8 @@ class CoroutineInlayHintsProvider implements vscode.InlayHintsProvider {
         if (!cfg.get<boolean>('inlayHints.enabled', true)) return [];
         const points = getOrComputePoints(doc);
         const hints: vscode.InlayHint[] = [];
+
+        // suspend / await labels at suspension call sites
         for (const p of points) {
             if (p.line < range.start.line || p.line > range.end.line) continue;
             if (SUSPEND_DECLARATION_KINDS.has(p.kind)) continue;
@@ -318,6 +356,139 @@ class CoroutineInlayHintsProvider implements vscode.InlayHintsProvider {
             hint.tooltip = hoverMarkdown(p);
             hints.push(hint);
         }
+
+        // withContext(Dispatchers.X) { … } — label the closing brace with // X
+        const blocks = findWithContextBlocks(doc.getText());
+        for (const b of blocks) {
+            if (b.closeLine < range.start.line || b.closeLine > range.end.line) continue;
+            // Skip if the block fits on a single line (the label would be noise).
+            if (b.closeLine === b.openLine) continue;
+            const hint = new vscode.InlayHint(
+                new vscode.Position(b.closeLine, b.closeChar + 1),
+                ` // ${b.dispatcherName}`,
+                vscode.InlayHintKind.Type,
+            );
+            hint.tooltip = new vscode.MarkdownString(
+                `Closing brace of \`withContext(Dispatchers.${b.dispatcherName})\``,
+            );
+            hints.push(hint);
+        }
+
         return hints;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code actions (quickfixes for anti-pattern diagnostics)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class CoroutineCodeActionsProvider implements vscode.CodeActionProvider {
+    provideCodeActions(
+        doc: vscode.TextDocument,
+        range: vscode.Range,
+        ctx: vscode.CodeActionContext,
+    ): vscode.ProviderResult<vscode.CodeAction[]> {
+        const actions: vscode.CodeAction[] = [];
+        const ourDiags = ctx.diagnostics.filter(d => d.source === 'Kotlinx Coroutines');
+
+        for (const diag of ourDiags) {
+            const code = typeof diag.code === 'object' ? String(diag.code.value) : String(diag.code);
+
+            if (code === 'COR001') {
+                // runBlocking → coroutineScope
+                const action = new vscode.CodeAction(
+                    'Replace with `coroutineScope { }`',
+                    vscode.CodeActionKind.QuickFix,
+                );
+                action.edit = new vscode.WorkspaceEdit();
+                action.edit.replace(doc.uri, diag.range, 'coroutineScope');
+                action.diagnostics = [diag];
+                action.isPreferred = true;
+                actions.push(action);
+
+            } else if (code === 'COR003') {
+                // Thread.sleep(N) → delay(N)
+                const lineText = doc.lineAt(diag.range.start.line).text;
+                const fromChar = diag.range.start.character;
+                const m = lineText.slice(fromChar).match(/Thread\s*\.\s*sleep\s*\(([^)]+)\)/);
+                if (m) {
+                    const fullRange = new vscode.Range(
+                        diag.range.start.line, fromChar,
+                        diag.range.start.line, fromChar + m[0].length,
+                    );
+                    const action = new vscode.CodeAction(
+                        'Replace with `delay(…)`',
+                        vscode.CodeActionKind.QuickFix,
+                    );
+                    action.edit = new vscode.WorkspaceEdit();
+                    action.edit.replace(doc.uri, fullRange, `delay(${m[1].trim()})`);
+                    action.diagnostics = [diag];
+                    action.isPreferred = true;
+                    actions.push(action);
+                }
+
+            } else if (code === 'COR004') {
+                // async { body }.await() → withContext(coroutineContext) { body }
+                const lineText = doc.lineAt(diag.range.start.line).text;
+                const fromChar = diag.range.start.character;
+                const m = lineText.slice(fromChar).match(/async\s*\{([^{}]*)\}\s*\.await\(\)/);
+                if (m) {
+                    const fullRange = new vscode.Range(
+                        diag.range.start.line, fromChar,
+                        diag.range.start.line, fromChar + m[0].length,
+                    );
+                    const action = new vscode.CodeAction(
+                        'Replace with `withContext(coroutineContext) { … }`',
+                        vscode.CodeActionKind.QuickFix,
+                    );
+                    action.edit = new vscode.WorkspaceEdit();
+                    action.edit.replace(doc.uri, fullRange, `withContext(coroutineContext) {${m[1]}}`);
+                    action.diagnostics = [diag];
+                    action.isPreferred = true;
+                    actions.push(action);
+                }
+            }
+        }
+
+        // "Add suspend modifier" for any suspension call outside a suspend context
+        const points = getOrComputePoints(doc);
+        const unsafePoints = points.filter(p =>
+            !SUSPEND_DECLARATION_KINDS.has(p.kind) &&
+            !p.insideSuspendContext &&
+            p.line >= range.start.line &&
+            p.line <= range.end.line,
+        );
+        if (unsafePoints.length > 0) {
+            const funLine = findEnclosingFunLine(doc, range.start.line);
+            if (funLine !== undefined) {
+                const lineText = doc.lineAt(funLine).text;
+                const funIdx = lineText.search(/\bfun\b/);
+                if (funIdx !== -1) {
+                    const action = new vscode.CodeAction(
+                        'Add `suspend` modifier to enclosing function',
+                        vscode.CodeActionKind.QuickFix,
+                    );
+                    action.edit = new vscode.WorkspaceEdit();
+                    action.edit.insert(doc.uri, new vscode.Position(funLine, funIdx), 'suspend ');
+                    actions.push(action);
+                }
+            }
+        }
+
+        return actions;
+    }
+}
+
+/**
+ * Walk backwards from `fromLine` to find the nearest enclosing non-suspend
+ * function declaration. Returns `undefined` if none is found or if the
+ * nearest match is already `suspend`.
+ */
+function findEnclosingFunLine(doc: vscode.TextDocument, fromLine: number): number | undefined {
+    for (let i = fromLine; i >= 0; i--) {
+        const text = doc.lineAt(i).text;
+        if (/\bsuspend\s+fun\b/.test(text)) return undefined;
+        if (/\bfun\s+[A-Za-z_`]/.test(text)) return i;
+    }
+    return undefined;
 }

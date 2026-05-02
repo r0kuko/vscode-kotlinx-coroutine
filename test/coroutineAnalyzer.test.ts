@@ -104,6 +104,17 @@ describe('analyze', () => {
         expect(byName('collect').some(p => p.kind === 'flowTerminal')).toBe(true);
     });
 
+    it('does NOT flag firstOrNull/toList/count on plain collections as flowTerminal', () => {
+        const src = `
+fun handler(args: List<String>) {
+    val id = args.firstOrNull()
+    val copy = args.toList()
+    val n = args.count()
+}`;
+        const pts = analyze(src);
+        expect(pts.filter(p => p.kind === 'flowTerminal')).toHaveLength(0);
+    });
+
     it('flags suspend function declarations (legacy + specific kinds)', () => {
         expect(byName('fetchUser').some(p => p.kind === 'suspendFunctionDecl')).toBe(true);
         // Top-level suspend fun → suspendFunction.
