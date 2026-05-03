@@ -24,7 +24,7 @@
     "onLanguage:kotlin"
   ],
   "main": "./out/extension.js",
-  "icon": "images/kotlinx-icon.png",
+  "icon": "images/icon.png",
   "contributes": {
     "configuration": {
       "title": "Kotlinx Coroutines Insight",
