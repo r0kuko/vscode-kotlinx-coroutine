@@ -2,7 +2,7 @@
   "name": "vscode-kotlinx-coroutine",
   "displayName": "Kotlinx Coroutines Insight",
   "description": "JetBrains-style suspension highlighting and developer-productivity boosters for Kotlin coroutines (kotlinx.coroutines, Flow, suspend functions).",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "r0kuko",
   "license": "MIT",
   "engines": {
